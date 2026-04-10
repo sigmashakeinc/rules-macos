@@ -1,0 +1,57 @@
+# macos_write_safety.rules — macOS write-time safety enforcement.
+# Technology: macos | Capability: write
+# Covers: LaunchAgent/Daemon persistence, plist misconfig, entitlements, SIP-protected paths.
+
+rule no-launchagent-all-users {
+  enabled true
+  priority 100
+  severity error
+  ASK write
+  IF path GLOB "/Library/LaunchDaemons/*.plist" AND content CONTAINS "RunAtLoad"
+  OR path GLOB "/Library/LaunchAgents/*.plist" AND content CONTAINS "RunAtLoad"
+  MESSAGE "Writing a LaunchDaemon/LaunchAgent in /Library/ installs persistence that runs for all users or as root at boot. This is a common macOS malware persistence technique."
+  PROMPT "Is this launch agent/daemon intentionally installed system-wide? Prefer per-user launch agents in ~/Library/LaunchAgents/ and require explicit user authorization."
+}
+
+rule no-plist-allow-arbitrary-loads {
+  enabled true
+  priority 100
+  severity error
+  DENY write
+  IF content CONTAINS "NSAllowsArbitraryLoads" AND content CONTAINS "true"
+  OR content CONTAINS "NSExceptionAllowsInsecureHTTPLoads" AND content CONTAINS "true"
+  MESSAGE "NSAllowsArbitraryLoads disables ATS (App Transport Security) and allows insecure HTTP connections. This is rejected by App Store review and exposes data in transit. Remove this key or use specific domain exceptions."
+}
+
+rule no-com-apple-security-disabled {
+  enabled true
+  priority 100
+  severity error
+  DENY write
+  IF content CONTAINS "com.apple.security.app-sandbox" AND content CONTAINS "false"
+  OR content CONTAINS "com.apple.security.get-task-allow" AND content CONTAINS "true"
+  MESSAGE "Disabling app-sandbox removes the primary macOS application isolation layer. Setting get-task-allow=true enables code injection for debugging but must never ship in production."
+}
+
+rule no-plist-world-writable {
+  enabled true
+  priority 90
+  severity error
+  ASK write
+  IF path GLOB "**/*.plist" AND content CONTAINS "chmod 777"
+  OR path GLOB "/Library/**/*.plist" AND content CONTAINS "ProgramArguments" AND content CONTAINS "/tmp/"
+  MESSAGE "LaunchAgent/Daemon plists with world-writable permissions or scripts from /tmp are common local privilege escalation vectors. Use mode 644 for plists owned by root."
+  PROMPT "Is this plist executing scripts from /tmp? Move scripts to /usr/local/bin/ or /opt/ with proper ownership and permissions (root:wheel, mode 755)."
+}
+
+rule no-hosts-file-macos {
+  enabled true
+  priority 85
+  severity warning
+  ASK write
+  IF path GLOB "**/hosts" AND content CONTAINS "127.0.0.1" AND content NOT CONTAINS "localhost"
+  OR path GLOB "/etc/hosts" AND content LINE_REGEX "^[0-9].*\\.apple\\.com"
+  OR path GLOB "/etc/hosts" AND content LINE_REGEX "^[0-9].*\\.icloud\\.com"
+  MESSAGE "Modifying /etc/hosts to redirect Apple or iCloud domains blocks security updates, certificate validation, and Apple services. This can prevent critical system updates from installing."
+  PROMPT "Are you redirecting Apple domains intentionally? Blocking apple.com or icloud.com will prevent software updates, iCloud sync, and certificate revocation checks."
+}
