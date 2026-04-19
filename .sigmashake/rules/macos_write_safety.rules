@@ -42,6 +42,61 @@ rule no-plist-world-writable {
   MESSAGE "LaunchAgent/Daemon plists with world-writable permissions or scripts from /tmp are common local privilege escalation vectors. Use mode 644 for plists owned by root."
 }
 
+rule no-user-launchagent-persistence {
+  enabled true
+  priority 95
+  severity error
+  ASK write
+  IF path GLOB "**/Library/LaunchAgents/*.plist" AND content CONTAINS "RunAtLoad"
+  OR path GLOB "**/Library/LaunchAgents/*.plist" AND content CONTAINS "KeepAlive"
+  MESSAGE "Per-user LaunchAgents in ~/Library/LaunchAgents are the top macOS persistence technique used by AMOS, ChillyHell, and Odyssey stealers in 2025. Confirm this persistence is legitimate and documented."
+  PROMPT "Is this LaunchAgent persistence intentional and user-visible? Consider using the SMAppService API (macOS 13+) with a registered Login Item instead."
+}
+
+rule no-shell-profile-backdoor {
+  enabled true
+  priority 90
+  severity warning
+  LOG write
+  IF path GLOB "**/.zshrc" AND content LINE_REGEX "(curl|wget|nc|bash\\s+-i|/dev/tcp/)"
+  OR path GLOB "**/.bash_profile" AND content LINE_REGEX "(curl|wget|nc|bash\\s+-i|/dev/tcp/)"
+  OR path GLOB "**/.profile" AND content LINE_REGEX "(curl|wget|nc|bash\\s+-i|/dev/tcp/)"
+  MESSAGE "Injecting network/reverse-shell commands into shell profiles (.zshrc/.bash_profile) is a ChillyHell backdoor persistence pattern. Shell rc files should only contain aliases, env vars, and PATH — not network calls."
+}
+
+rule no-disable-library-validation {
+  enabled true
+  priority 100
+  severity error
+  DENY write
+  IF content CONTAINS "com.apple.security.cs.disable-library-validation" AND content CONTAINS "true"
+  OR content CONTAINS "com.apple.security.cs.disable-executable-page-protection" AND content CONTAINS "true"
+  OR content CONTAINS "com.apple.security.cs.allow-dyld-environment-variables" AND content CONTAINS "true"
+  MESSAGE "Disabling library validation or executable page protection defeats the Hardened Runtime and enables dylib hijacking / code injection (CVE-2024-44243-class). Ship only with these entitlements false; if a plugin host truly needs them, scope narrowly and notarize."
+}
+
+rule no-allow-jit-unjustified {
+  enabled true
+  priority 80
+  severity warning
+  ASK write
+  IF content CONTAINS "com.apple.security.cs.allow-jit" AND content CONTAINS "true"
+  OR content CONTAINS "com.apple.security.cs.allow-unsigned-executable-memory" AND content CONTAINS "true"
+  MESSAGE "allow-jit and allow-unsigned-executable-memory weaken W^X enforcement in the Hardened Runtime. Only enable for genuine JIT engines (JavaScriptCore/V8); otherwise leave false to block shellcode execution."
+  PROMPT "Does this binary actually contain a JIT compiler? If not, remove the entitlement."
+}
+
+rule no-automation-apple-events-wildcard {
+  enabled true
+  priority 90
+  severity error
+  ASK write
+  IF content CONTAINS "com.apple.security.temporary-exception.apple-events"
+  OR content CONTAINS "com.apple.security.automation.apple-events" AND content CONTAINS "true"
+  MESSAGE "Broad Apple Events / automation entitlements let the app script Finder, Mail, and other apps — the exact surface exploited by CVE-2025-43530 VoiceOver TCC bypass. Prefer a narrowly scoped NSAppleEventsUsageDescription and target-specific com.apple.security.scripting-targets."
+  PROMPT "Is cross-app automation required? Replace with targeted scripting-targets or user-visible Accessibility API."
+}
+
 rule no-hosts-file-macos {
   enabled true
   priority 85
